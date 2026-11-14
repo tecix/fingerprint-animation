@@ -37,9 +37,6 @@ const FADE_IN_MS = 180;
 const FADE_OUT_MS = 220;
 const SUCCESS_HOLD_S = 1.1;
 const FAILURE_HOLD_S = 1.1;
-// Login screen: after a match the check stays frozen until GDM replaces the
-// greeter with your session; this only clears it if that never happens.
-const GREETER_SUCCESS_TIMEOUT_S = 15;
 const RETRY_HOLD_S = 1.0;
 // Tracing the ridges in while a finger is on the sensor.
 const SCAN_TRACE_S = 0.9;
@@ -496,19 +493,14 @@ class FingerprintHud extends Clutter.Actor {
         // trace isn't waited for: the result animation completes it on the
         // way (see _params()).
         this._clearStopTimeout();
-        this._setState(state, message);
         if (state === State.SUCCESS && this._static()) {
-            // Freeze on the check: no hold, no fade-out, no work at all while
-            // the session loads.
-            this._clearResolveTimeout();
-            this._resolveId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT,
-                GREETER_SUCCESS_TIMEOUT_S, () => {
-                    this._resolveId = 0;
-                    this._hide(true);
-                    return GLib.SOURCE_REMOVE;
-                });
+            // Login screen: GDM starts loading the session right away and
+            // shows its own transition, so get out of the way at once
+            // instead of animating (or even drawing) over the load.
+            this._hide(true);
             return;
         }
+        this._setState(state, message);
         this._scheduleResolve(holdS, finished);
     }
 

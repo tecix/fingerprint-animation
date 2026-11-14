@@ -113,8 +113,8 @@ in green or red, while the check mark or cross draws.
 
 The login screen gets static frames instead of animations: after a match GDM loads
 your session and the screen gets few frames, so any animation there would stutter.
-The HUD shows each state as one finished frame (reading, then the check or the cross)
-and, after a match, stays frozen on the check until your session takes over.
+The HUD shows each state as one finished frame (reading, or the cross on a failure)
+and disappears instantly on a match, leaving the screen to GDM's own login transition.
 
 If a reader doesn't report `finger-needed` / `finger-present` at all, the HUD falls
 back to the `VerifyFingerSelected` signal to show that a prompt is waiting.
