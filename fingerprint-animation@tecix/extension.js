@@ -37,6 +37,10 @@ const FADE_IN_MS = 180;
 const FADE_OUT_MS = 220;
 const SUCCESS_HOLD_S = 1.1;
 const FAILURE_HOLD_S = 1.1;
+// Login screen: wait this long after a touch before showing "Reading". A
+// match usually arrives sooner, and then the HUD never appears at all, so
+// nothing is drawn while GDM starts loading the session.
+const GREETER_READING_DELAY_MS = 350;
 const RETRY_HOLD_S = 1.0;
 // Tracing the ridges in while a finger is on the sensor.
 const SCAN_TRACE_S = 0.9;
@@ -377,6 +381,7 @@ class FingerprintHud extends Clutter.Actor {
         this._touchedThisAttempt = false;
         this._resolveId = 0;
         this._stopId = 0;
+        this._readingId = 0;
 
         this.connect('destroy', () => this._onDestroy());
         this._updateBlur();
@@ -490,8 +495,24 @@ class FingerprintHud extends Clutter.Actor {
         if (present) {
             this._touchedThisAttempt = true;
             if (!this._isBusy())
-                this._setState(State.SCANNING);
+                this._showReading();
         }
+    }
+
+    _showReading() {
+        if (!this._static() || this._state !== State.HIDDEN) {
+            this._setState(State.SCANNING);
+            return;
+        }
+        // Login screen, HUD not up yet: hold off (see GREETER_READING_DELAY_MS).
+        if (this._readingId)
+            return;
+        this._readingId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, GREETER_READING_DELAY_MS, () => {
+            this._readingId = 0;
+            if (this._state === State.HIDDEN && this._fingerPresent && !this._isBusy())
+                this._setState(State.SCANNING);
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     verifyStatus(result, done) {
@@ -543,6 +564,7 @@ class FingerprintHud extends Clutter.Actor {
         // trace isn't waited for: the result animation completes it on the
         // way (see _params()).
         this._clearStopTimeout();
+        this._clearReadingTimeout();
         if (state === State.SUCCESS && this._static()) {
             // Login screen: GDM starts loading the session right away and
             // shows its own transition, so get out of the way at once
@@ -560,8 +582,10 @@ class FingerprintHud extends Clutter.Actor {
         const alwaysListening = Main.sessionMode.isLocked || Main.sessionMode.isGreeter;
         if (alwaysListening && !this._fingerPresent)
             this._hide();
+        else if (this._fingerPresent)
+            this._showReading();
         else
-            this._setState(this._fingerPresent ? State.SCANNING : State.WAITING);
+            this._setState(State.WAITING);
     }
 
     _scheduleResolve(seconds, finished = false) {
@@ -627,6 +651,7 @@ class FingerprintHud extends Clutter.Actor {
     _hide(immediately = false) {
         this._clearResolveTimeout();
         this._clearStopTimeout();
+        this._clearReadingTimeout();
         if (this._state === State.HIDDEN)
             return;
         this._frozen = this._params(); // keep the last look while fading out
@@ -659,6 +684,13 @@ class FingerprintHud extends Clutter.Actor {
         if (this._resolveId) {
             GLib.source_remove(this._resolveId);
             this._resolveId = 0;
+        }
+    }
+
+    _clearReadingTimeout() {
+        if (this._readingId) {
+            GLib.source_remove(this._readingId);
+            this._readingId = 0;
         }
     }
 
@@ -775,6 +807,7 @@ class FingerprintHud extends Clutter.Actor {
     _onDestroy() {
         this._clearResolveTimeout();
         this._clearStopTimeout();
+        this._clearReadingTimeout();
         this._timeline.stop();
         this._timeline.disconnectObject(this);
         this._timeline = null;

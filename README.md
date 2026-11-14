@@ -115,6 +115,8 @@ The login screen gets static frames instead of animations: after a match GDM loa
 your session and the screen gets few frames, so any animation there would stutter.
 The HUD shows each state as one finished frame (reading, or the cross on a failure)
 and disappears instantly on a match, leaving the screen to GDM's own login transition.
+It also waits 350 ms after a touch before showing "Reading": most readers match
+sooner, and then the HUD never appears on the login screen at all.
 
 If a reader doesn't report `finger-needed` / `finger-present` at all, the HUD falls
 back to the `VerifyFingerSelected` signal to show that a prompt is waiting.
