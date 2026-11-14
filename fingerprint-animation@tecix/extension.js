@@ -135,32 +135,71 @@ class FprintWatcher {
 
 // Rounds the corners of the actor it is attached to (the blurred backdrop),
 // with a one-pixel anti-aliased edge.
-const CornerMaskEffect = GObject.registerClass(
-class CornerMaskEffect extends Shell.GLSLEffect {
-    _init() {
-        super._init();
-        this._sizeLocation = this.get_uniform_location('fp_size');
-        this._radiusLocation = this.get_uniform_location('fp_radius');
-    }
+const CORNER_MASK_DECLARATIONS = `
+    uniform vec2 fp_size;
+    uniform float fp_radius;
+`;
+const CORNER_MASK_CODE = `
+    vec2 p = cogl_tex_coord_in[0].xy * fp_size - 0.5 * fp_size;
+    vec2 q = abs(p) - 0.5 * fp_size + vec2(fp_radius);
+    float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - fp_radius;
+    cogl_color_out *= 1.0 - smoothstep(-0.75, 0.75, d);
+`;
 
-    vfunc_build_pipeline() {
-        this.add_glsl_snippet(Cogl.SnippetHook.FRAGMENT, `
-            uniform vec2 fp_size;
-            uniform float fp_radius;
-        `, `
-            vec2 p = cogl_tex_coord_in[0].xy * fp_size - 0.5 * fp_size;
-            vec2 q = abs(p) - 0.5 * fp_size + vec2(fp_radius);
-            float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - fp_radius;
-            cogl_color_out *= 1.0 - smoothstep(-0.75, 0.75, d);
-        `, false);
-    }
+// GNOME 46–50 have Shell.GLSLEffect. GNOME 51 removed it in favour of
+// Clutter.ShaderEffect with a static Cogl snippet and uniforms set by name.
+// Defined on first use, inside a try: if neither works, only the blur is
+// turned off and the HUD still loads.
+function defineCornerMaskEffect() {
+    if (Shell.GLSLEffect) {
+        return GObject.registerClass(
+        class CornerMaskEffect extends Shell.GLSLEffect {
+            _init() {
+                super._init();
+                this._sizeLocation = this.get_uniform_location('fp_size');
+                this._radiusLocation = this.get_uniform_location('fp_radius');
+            }
 
-    setGeometry(width, height, radius) {
-        this.set_uniform_float(this._sizeLocation, 2, [width, height]);
-        this.set_uniform_float(this._radiusLocation, 1, [radius]);
-        this.queue_repaint();
+            vfunc_build_pipeline() {
+                this.add_glsl_snippet(Cogl.SnippetHook.FRAGMENT,
+                    CORNER_MASK_DECLARATIONS, CORNER_MASK_CODE, false);
+            }
+
+            setGeometry(width, height, radius) {
+                this.set_uniform_float(this._sizeLocation, 2, [width, height]);
+                this.set_uniform_float(this._radiusLocation, 1, [radius]);
+                this.queue_repaint();
+            }
+        });
     }
-});
+    return GObject.registerClass(
+    class CornerMaskEffect extends Clutter.ShaderEffect {
+        vfunc_get_static_snippet() {
+            return Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT,
+                CORNER_MASK_DECLARATIONS, CORNER_MASK_CODE);
+        }
+
+        setGeometry(width, height, radius) {
+            this.set_uniform_float('fp_size', 2, [width, height]);
+            this.set_uniform_float('fp_radius', 1, [radius]);
+            this.queue_repaint();
+        }
+    });
+}
+
+let CornerMaskEffect;
+
+function cornerMaskEffect() {
+    if (CornerMaskEffect === undefined) {
+        try {
+            CornerMaskEffect = defineCornerMaskEffect();
+        } catch (e) {
+            console.warn(`Fingerprint Animation: no shader effect support: ${e.message}`);
+            CornerMaskEffect = null;
+        }
+    }
+    return CornerMaskEffect;
+}
 
 // True while a backdrop paints its clone of the Shell UI; the HUD skips
 // drawing itself then, so it doesn't end up inside its own backdrop.
@@ -216,7 +255,8 @@ class BlurredBackdrop extends Clutter.Actor {
     _init(radius, brightness) {
         super._init({x_expand: true, y_expand: true, clip_to_allocation: true});
         this.cornerRadius = 0;
-        this._mask = new CornerMaskEffect();
+        const MaskEffect = cornerMaskEffect();
+        this._mask = new MaskEffect();
         this.add_effect(this._mask);
 
         this._layer = new BackdropLayer();
@@ -317,6 +357,7 @@ class FingerprintHud extends Clutter.Actor {
         this._accent = DEFAULT_ACCENT;
         this._updateAccent();
 
+        this._blurFailed = false;
         this._settings = settings;
         this._settings.connectObject('changed', () => this._updateBlur(), this);
         Main.extensionManager.connectObject('extension-state-changed',
@@ -360,7 +401,7 @@ class FingerprintHud extends Clutter.Actor {
     _wantsBlur() {
         // Never on the lock or login screen: the backdrop is a copy of the
         // desktop, which must stay hidden there.
-        if (Main.sessionMode.isLocked || Main.sessionMode.isGreeter)
+        if (this._blurFailed || Main.sessionMode.isLocked || Main.sessionMode.isGreeter)
             return false;
         switch (this._settings.get_string('blur-mode')) {
         case 'on':
@@ -378,7 +419,16 @@ class FingerprintHud extends Clutter.Actor {
         const brightness = this._settings.get_double('blur-brightness');
         if (this._wantsBlur()) {
             if (!this._backdrop) {
-                this._backdrop = new BlurredBackdrop(radius, brightness);
+                try {
+                    if (!cornerMaskEffect())
+                        throw new Error('no shader effect support');
+                    this._backdrop = new BlurredBackdrop(radius, brightness);
+                } catch (e) {
+                    // Never let the optional blur keep the HUD from working.
+                    console.warn(`Fingerprint Animation: background blur unavailable: ${e.message}`);
+                    this._blurFailed = true;
+                    return;
+                }
                 this._frame.insert_child_below(this._backdrop, this._box);
                 this._box.add_style_class_name('fp-hud-blurred');
             }

@@ -94,7 +94,7 @@ login screen.
 
 ## Requirements
 
-- GNOME Shell 46–50 (developed and tested on Ubuntu 26.04 / GNOME 50)
+- GNOME Shell 46–51 (developed and tested on Ubuntu 26.04 / GNOME 50)
 - `fprintd` with the `finger-present` / `finger-needed` device properties (tested with 1.94), and an enrolled finger
 - Fingerprint authentication enabled in PAM (Ubuntu: `sudo pam-auth-update`, then tick *Fingerprint authentication*)
 
