@@ -23,7 +23,7 @@ the screen that follows the reader:
 | Reader state | What you see |
 |---|---|
 | Waiting for a finger | Fingerprint in your accent colour with a soft ripple. *"Touch the fingerprint sensor"* |
-| Finger on the sensor | Ridges light up from the centre outward with a scanning shimmer. *"Reading fingerprint…"* |
+| Finger on the sensor | Ridges are traced in from the centre outward, then a shimmer sweeps while the reader decides. *"Reading fingerprint…"* |
 | Match | Turns green, draws a check mark, fades out |
 | No match | Turns red, shakes, shows a cross, then waits for the next try |
 | Retry (finger not centred, swipe too short, …) | Amber with a small shake and a hint |
@@ -91,6 +91,12 @@ fprintd broadcasts the reader's state on the system D-Bus. The extension subscri
 - the `finger-present` property: a finger is on the sensor, so show the scanning animation
 - the `VerifyStatus` signal: `verify-match`, `verify-no-match` and the retry codes, which drive the result animations
 
+Many readers (match-on-chip sensors in particular) report the touch and the result
+in the same instant. The reading animation still plays in full (about 0.75 s) before
+the result is shown, so you always see it. If a reader doesn't report
+`finger-needed` / `finger-present` at all, the HUD falls back to the `VerifyFingerSelected`
+signal to show that a prompt is waiting.
+
 The lock and login screens keep the reader listening the whole time they're up, so
 there the HUD only appears once a finger actually touches the sensor.
 
@@ -109,8 +115,8 @@ there the HUD only appears once a finger actually touches the sensor.
 - **Lock screen.** It runs in the `unlock-dialog` session mode only to draw the
   animation while you unlock. It adds no controls there and shows nothing beyond the
   reader's state.
-- **No network, no files, no logging.** The only setting it reads is your accent
-  colour (`org.gnome.desktop.interface accent-color`).
+- **No network, no files, no logging.** It reads no settings of its own; the accent
+  colour comes from the Shell theme.
 - **`install-gdm.sh`** runs as root. It only copies the four extension files to a
   fixed path, writes one dconf keyfile, and rebuilds GDM's settings. Read it before
   running it.

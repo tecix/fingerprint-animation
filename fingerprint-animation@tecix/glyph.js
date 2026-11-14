@@ -39,6 +39,11 @@ function clamp01(x) {
     return Math.max(0, Math.min(1, x));
 }
 
+export function easeOutQuad(t) {
+    t = clamp01(t);
+    return 1 - (1 - t) ** 2;
+}
+
 export function easeOutCubic(t) {
     t = clamp01(t);
     return 1 - (1 - t) ** 3;
@@ -79,45 +84,44 @@ export function drawGlyph(cr, size, p) {
     const ridgeAlpha = p.ridgeAlpha ?? 1;
     if (ridgeAlpha > 0) {
         const lw = 4.2;
-        const fillR = p.fill * (MAX_R + 6);
+        const fillR = p.fill * (MAX_R + 16);
 
-        const strokeRidge = (r, path) => {
-            // Base colour.
+        const strokeRidge = (r, a0, a1) => {
+            // Each ridge is "read" by tracing it outwards from its middle,
+            // inner ridges first, with overlap so the reveal flows smoothly.
+            const lit = clamp01((fillR - r) / 16);
+            const fullAlpha = ridgeAlpha * (1 - 0.35 * lit);
+
             cr.setLineWidth(lw);
-            path();
-            let lit = clamp01((fillR - r + 4) / 8);
-            let color = p.base;
-            if (lit > 0)
-                color = mix(p.base, p.lit, lit);
-            setRGBA(cr, color, ridgeAlpha);
+            arcPath(cr, r, a0, a1);
+            setRGBA(cr, p.base, fullAlpha);
             cr.stroke();
+
+            if (lit > 0) {
+                const mid = (a0 + a1) / 2;
+                const half = (a1 - a0) / 2 * easeOutCubic(lit);
+                arcPath(cr, r, mid - half, mid + half);
+                setRGBA(cr, mix(p.base, p.lit, Math.min(1, lit * 1.6)), ridgeAlpha);
+                cr.stroke();
+            }
 
             // Scanning wavefront: brighten ridges near the front.
             if (p.wave >= 0) {
                 const front = p.wave * (MAX_R + 12) - 6;
-                const d = Math.abs(r - front);
-                const glow = clamp01(1 - d / 7);
+                const glow = clamp01(1 - Math.abs(r - front) / 7);
                 if (glow > 0) {
+                    const mid = (a0 + a1) / 2;
+                    const half = (a1 - a0) / 2 * (lit > 0 ? easeOutCubic(lit) : 1);
                     cr.setLineWidth(lw + 2.5 * glow);
-                    path();
+                    arcPath(cr, r, mid - half, mid + half);
                     setRGBA(cr, mix(p.lit, [1, 1, 1, 1], 0.55), ridgeAlpha * glow);
                     cr.stroke();
                 }
             }
         };
 
-        for (const [r, a0, a1] of RIDGES) {
-            strokeRidge(r, () => {
-                // Build the path in the squashed space, stroke in the
-                // normal one so line widths stay even.
-                cr.save();
-                cr.translate(CX, CY);
-                cr.scale(SX, 1);
-                cr.newPath();
-                cr.arc(0, 0, r, deg(a0), deg(a1));
-                cr.restore();
-            });
-        }
+        for (const [r, a0, a1] of RIDGES)
+            strokeRidge(r, a0, a1);
     }
 
     if (p.check >= 0)
@@ -127,6 +131,17 @@ export function drawGlyph(cr, size, p) {
         drawMark(cr, p.lit, clamp01(p.cross * 2 - 1), [[63, 37], [37, 63]], false);
     }
 
+    cr.restore();
+}
+
+// Ridge arc in the squashed (oval) space; stroked in the normal one so
+// line widths stay even.
+function arcPath(cr, r, a0, a1) {
+    cr.save();
+    cr.translate(CX, CY);
+    cr.scale(SX, 1);
+    cr.newPath();
+    cr.arc(0, 0, r, deg(a0), deg(a1));
     cr.restore();
 }
 

@@ -17,23 +17,13 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Layout from 'resource:///org/gnome/shell/ui/layout.js';
 import {Extension, gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
 
-import {drawGlyph, easeOutCubic, mix} from './glyph.js';
+import {drawGlyph, easeOutCubic, easeOutQuad, mix} from './glyph.js';
 
 const FPRINT_BUS_NAME = 'net.reactivated.Fprint';
 const FPRINT_DEVICE_IFACE = 'net.reactivated.Fprint.Device';
 
-// GNOME accent colours (org.gnome.desktop.interface accent-color).
-const ACCENTS = {
-    blue: [0.21, 0.52, 0.89],
-    teal: [0.13, 0.56, 0.64],
-    green: [0.23, 0.58, 0.29],
-    yellow: [0.78, 0.53, 0.0],
-    orange: [0.93, 0.36, 0.0],
-    red: [0.9, 0.18, 0.26],
-    pink: [0.84, 0.38, 0.6],
-    purple: [0.57, 0.25, 0.67],
-    slate: [0.44, 0.51, 0.59],
-};
+// Used when the Shell has no accent colour API (GNOME 46).
+const DEFAULT_ACCENT = [0.21, 0.52, 0.89, 1];
 const IDLE = [1, 1, 1, 0.34];
 const GREEN = [0.2, 0.82, 0.48, 1];
 const RED = [1, 0.3, 0.37, 1];
@@ -44,8 +34,17 @@ const FADE_OUT_MS = 220;
 const SUCCESS_HOLD_S = 1.1;
 const FAILURE_HOLD_S = 1.1;
 const RETRY_HOLD_S = 1.0;
+// The reading animation (ridges traced from the centre out) always plays for
+// this long before a result is shown. Many readers report the touch and the
+// result in the same instant, which would otherwise skip it.
+const SCAN_S = 0.75;
+// Colour crossfade into the result colour.
+const RESULT_FADE_S = 0.25;
 // After the reader stops listening, wait this long for a result before hiding.
 const STOP_GRACE_MS = 400;
+// ... or this long once a finger touched it: readers that match on the
+// computer stop listening while they still process the print.
+const TOUCHED_STOP_GRACE_MS = 3000;
 
 const State = {
     HIDDEN: 'hidden',
@@ -156,7 +155,7 @@ class FingerprintHud extends Clutter.Actor {
             style_class: 'fp-hud-glyph',
             x_align: Clutter.ActorAlign.CENTER,
         });
-        this._area.connect('repaint', area => this._repaint(area));
+        this._area.connectObject('repaint', area => this._repaint(area), this);
         this._box.add_child(this._area);
 
         this._label = new St.Label({
@@ -173,31 +172,35 @@ class FingerprintHud extends Clutter.Actor {
             duration: 1000,
             repeat_count: -1,
         });
-        this._timeline.connect('new-frame', () => this._onFrame());
+        this._timeline.connectObject('new-frame', () => this._onFrame(), this);
 
-        this._interface = new Gio.Settings({schema_id: 'org.gnome.desktop.interface'});
-        this._accent = [...ACCENTS.blue, 1];
-        if (this._interface.settings_schema.has_key('accent-color')) {
-            this._interface.connectObject('changed::accent-color',
-                () => this._updateAccent(), this);
-            this._updateAccent();
-        }
+        // The theme context re-emits 'changed' when the accent colour changes.
+        this._themeContext = St.ThemeContext.get_for_stage(global.stage);
+        this._themeContext.connectObject('changed', () => this._updateAccent(), this);
+        this._accent = DEFAULT_ACCENT;
+        this._updateAccent();
 
         this._state = State.HIDDEN;
         this._stateStart = 0;
         this._fill = 0; // radial fill reached so far, carried across states
         this._fingerNeeded = false;
+        this._sawFingerNeeded = false; // the reader reports finger-needed
         this._fingerPresent = false;
+        this._listening = false;
         this._touchedThisAttempt = false;
         this._resolveId = 0;
         this._stopId = 0;
+        this._pendingId = 0;
 
         this.connect('destroy', () => this._onDestroy());
     }
 
     _updateAccent() {
-        const name = this._interface.get_string('accent-color');
-        this._accent = [...(ACCENTS[name] ?? ACCENTS.blue), 1];
+        // St.ThemeContext.get_accent_color() exists since GNOME 47.
+        if (typeof this._themeContext.get_accent_color !== 'function')
+            return;
+        const [color] = this._themeContext.get_accent_color();
+        this._accent = [color.red / 255, color.green / 255, color.blue / 255, 1];
         this._area.queue_repaint();
     }
 
@@ -205,20 +208,30 @@ class FingerprintHud extends Clutter.Actor {
 
     verifyStarted() {
         this._touchedThisAttempt = false;
+        this._listening = true;
+        this._clearStopTimeout();
+        // finger-needed normally follows right away; showing the HUD here as
+        // well covers readers and fprintd builds that don't report it.
+        if (!this._isBusy() && this._state !== State.SCANNING)
+            this._enterIdleOrWaiting();
     }
 
     fingerNeeded(needed) {
         this._fingerNeeded = needed;
+        this._sawFingerNeeded = true;
+        this._listening = needed;
         this._clearStopTimeout();
         if (needed) {
             this._touchedThisAttempt = false;
             if (this._isBusy())
                 return; // let the result animation finish, _resolve() picks it up
             this._enterIdleOrWaiting();
-        } else if (this._state === State.WAITING || this._state === State.SCANNING) {
+        } else if (!this._pendingId &&
+                   (this._state === State.WAITING || this._state === State.SCANNING)) {
             // The reader stopped listening. A result may still be on its way;
             // if none arrives, the prompt was cancelled.
-            this._stopId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, STOP_GRACE_MS, () => {
+            const grace = this._touchedThisAttempt ? TOUCHED_STOP_GRACE_MS : STOP_GRACE_MS;
+            this._stopId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, grace, () => {
                 this._stopId = 0;
                 if (this._state === State.WAITING || this._state === State.SCANNING)
                     this._hide();
@@ -237,29 +250,28 @@ class FingerprintHud extends Clutter.Actor {
     }
 
     verifyStatus(result, done) {
+        if (done)
+            this._listening = false;
         switch (result) {
         case 'verify-match':
-            this._setState(State.SUCCESS, _('Fingerprint recognized'));
-            this._scheduleResolve(SUCCESS_HOLD_S, true);
+            this._showResult(State.SUCCESS, _('Fingerprint recognized'), SUCCESS_HOLD_S, true);
             break;
         case 'verify-no-match':
             // fprintd also reports no-match when a prompt is cancelled (after
             // it stopped listening, with no touch); don't flash an error then.
-            if (!this._touchedThisAttempt && !this._fingerNeeded &&
-                this._state !== State.SCANNING) {
+            if (this._sawFingerNeeded && !this._touchedThisAttempt &&
+                !this._fingerNeeded && this._state !== State.SCANNING) {
                 this._hide();
                 break;
             }
             this._touchedThisAttempt = false;
-            this._setState(State.FAILURE, _('Not recognized'));
-            this._scheduleResolve(FAILURE_HOLD_S);
+            this._showResult(State.FAILURE, _('Not recognized'), FAILURE_HOLD_S);
             break;
         case 'verify-retry-scan':
         case 'verify-swipe-too-short':
         case 'verify-finger-not-centered':
         case 'verify-remove-and-retry':
-            this._setState(State.RETRY, retryMessage(result));
-            this._scheduleResolve(RETRY_HOLD_S);
+            this._showResult(State.RETRY, retryMessage(result), RETRY_HOLD_S);
             break;
         default: // verify-disconnected, verify-unknown-error, …
             if (done)
@@ -270,9 +282,35 @@ class FingerprintHud extends Clutter.Actor {
     // --- state machine --------------------------------------------------
 
     _isBusy() {
-        return this._state === State.SUCCESS ||
+        return this._pendingId !== 0 ||
+            this._state === State.SUCCESS ||
             this._state === State.FAILURE ||
             this._state === State.RETRY;
+    }
+
+    _showResult(state, message, holdS, finished = false) {
+        this._clearPending();
+        this._clearStopTimeout();
+        const apply = () => {
+            this._setState(state, message);
+            this._scheduleResolve(holdS, finished);
+        };
+        // Let the reading animation play out first, even when the reader
+        // reported the touch and the result at the same moment (or never
+        // reported the touch at all).
+        if (this._state === State.HIDDEN || this._state === State.WAITING)
+            this._setState(State.SCANNING);
+        const waitMs = this._state === State.SCANNING
+            ? Math.ceil((SCAN_S - this._elapsed()) * 1000) : 0;
+        if (waitMs <= 16) {
+            apply();
+            return;
+        }
+        this._pendingId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, waitMs, () => {
+            this._pendingId = 0;
+            apply();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _enterIdleOrWaiting() {
@@ -289,7 +327,7 @@ class FingerprintHud extends Clutter.Actor {
         this._clearResolveTimeout();
         this._resolveId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, seconds * 1000, () => {
             this._resolveId = 0;
-            if (!finished && this._fingerNeeded)
+            if (!finished && this._listening)
                 this._enterIdleOrWaiting();
             else
                 this._hide();
@@ -298,8 +336,10 @@ class FingerprintHud extends Clutter.Actor {
     }
 
     _setState(state, message = null) {
-        if (state !== State.SCANNING || this._state !== State.SCANNING) {
-            if (state !== State.SUCCESS)
+        const ongoing = state === State.WAITING || state === State.SCANNING;
+        if (!ongoing || state !== this._state) {
+            // Results carry on from the fill the scan reached.
+            if (ongoing)
                 this._fill = 0;
             this._stateStart = GLib.get_monotonic_time();
         }
@@ -325,8 +365,14 @@ class FingerprintHud extends Clutter.Actor {
         const parent = this.get_parent();
         parent?.set_child_above_sibling(this, null);
         this._box.remove_transition('opacity');
+        // Opacity gets its own easing: EASE_OUT_BACK overshoots past 255,
+        // and opacity is 8-bit, so it would wrap round and blink.
         this._box.ease({
             opacity: 255,
+            duration: FADE_IN_MS,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+        });
+        this._box.ease({
             scale_x: 1,
             scale_y: 1,
             duration: FADE_IN_MS,
@@ -337,6 +383,7 @@ class FingerprintHud extends Clutter.Actor {
     _hide() {
         this._clearResolveTimeout();
         this._clearStopTimeout();
+        this._clearPending();
         if (this._state === State.HIDDEN)
             return;
         this._frozen = this._params(); // keep the last look while fading out
@@ -361,6 +408,13 @@ class FingerprintHud extends Clutter.Actor {
         if (this._resolveId) {
             GLib.source_remove(this._resolveId);
             this._resolveId = 0;
+        }
+    }
+
+    _clearPending() {
+        if (this._pendingId) {
+            GLib.source_remove(this._pendingId);
+            this._pendingId = 0;
         }
     }
 
@@ -409,28 +463,33 @@ class FingerprintHud extends Clutter.Actor {
         case State.HIDDEN:
             return this._frozen ?? p;
         case State.SCANNING:
-            this._fill = Math.max(this._fill, easeOutCubic(t / 0.7));
+            // Ridges are traced from the centre outwards, with a bright
+            // front, then a shimmer keeps sweeping while the reader decides.
+            this._fill = Math.max(this._fill, easeOutQuad(t / SCAN_S));
             p.fill = this._fill;
-            p.wave = (t % 0.9) / 0.9;
+            p.wave = t < SCAN_S ? this._fill : ((t - SCAN_S) % 1.0) / 1.0;
             break;
         case State.SUCCESS: {
-            p.lit = GREEN;
-            p.fill = this._fill + (1 - this._fill) * easeOutCubic(t / 0.2);
-            const k = Math.max(0, t - 0.2);
+            const c = easeOutCubic(t / RESULT_FADE_S);
+            p.lit = mix(accent, GREEN, c);
+            p.fill = this._fill + (1 - this._fill) * c;
+            const k = Math.max(0, t - RESULT_FADE_S);
             p.ridgeAlpha = 1 - 0.85 * easeOutCubic(k / 0.3);
             p.check = k / 0.5;
             break;
         }
-        case State.FAILURE:
-            p.base = mix(IDLE, RED, 0.5);
-            p.lit = RED;
-            p.fill = 1;
+        case State.FAILURE: {
+            const c = easeOutCubic(t / RESULT_FADE_S);
+            p.base = mix(IDLE, mix(IDLE, RED, 0.5), c);
+            p.lit = mix(accent, RED, c);
+            p.fill = this._fill + (1 - this._fill) * c;
             p.ridgeAlpha = t < 0.6 ? 1 : 1 - 0.8 * easeOutCubic((t - 0.6) / 0.25);
             p.cross = t < 0.6 ? -1 : (t - 0.6) / 0.35;
             break;
+        }
         case State.RETRY:
-            p.lit = AMBER;
-            p.fill = 1 - easeOutCubic(t / 0.6);
+            p.lit = mix(accent, AMBER, easeOutCubic(t / RESULT_FADE_S));
+            p.fill = this._fill * (1 - easeOutCubic(t / 0.6));
             break;
         }
         return p;
@@ -448,10 +507,13 @@ class FingerprintHud extends Clutter.Actor {
     _onDestroy() {
         this._clearResolveTimeout();
         this._clearStopTimeout();
+        this._clearPending();
         this._timeline.stop();
+        this._timeline.disconnectObject(this);
         this._timeline = null;
-        this._interface.disconnectObject(this);
-        this._interface = null;
+        this._area.disconnectObject(this);
+        this._themeContext.disconnectObject(this);
+        this._themeContext = null;
     }
 });
 

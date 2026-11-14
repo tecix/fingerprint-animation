@@ -1,7 +1,7 @@
 {
   "uuid": "fingerprint-animation@tecix",
   "name": "Fingerprint Animation",
-  "description": "A Touch ID–style animation that shows when your fingerprint reader is waiting for a finger, reading it, and whether it was recognized.\n\nWorks with every prompt that uses fprintd: sudo in a terminal, password dialogs (polkit), and the lock screen.\n\n• Waiting: a fingerprint in your accent colour with a soft ripple\n• Finger on the sensor: the ridges light up from the centre outward\n• Recognized: turns green and draws a check mark\n• Not recognized: turns red, shakes and shows a cross\n\nRuns on the lock screen (unlock-dialog session mode) so the animation also plays when you unlock with your fingerprint; there it only appears once a finger touches the sensor. It only listens to fprintd's status signals on the system bus. It never reads, stores or sends fingerprint data, and it takes no input.\n\nLogin screen (GDM) support needs a system-wide install with install-gdm.sh from the source repository.",
+  "description": "A Touch ID–style animation that shows when your fingerprint reader is waiting for a finger, reading it, and whether it was recognized.\n\nWorks with every prompt that uses fprintd: sudo in a terminal, password dialogs (polkit), and the lock screen.\n\n• Waiting: a fingerprint in your accent colour with a soft ripple\n• Finger on the sensor: the ridges are traced in from the centre outward\n• Recognized: turns green and draws a check mark\n• Not recognized: turns red, shakes and shows a cross\n\nRuns on the lock screen (unlock-dialog session mode) so the animation also plays when you unlock with your fingerprint; there it only appears once a finger touches the sensor. It only listens to fprintd's status signals on the system bus. It never reads, stores or sends fingerprint data, and it takes no input.\n\nLogin screen (GDM) support needs a system-wide install with install-gdm.sh from the source repository.",
   "shell-version": [
     "46",
     "47",
@@ -13,6 +13,6 @@
     "user",
     "unlock-dialog"
   ],
-  "version-name": "1.0.0",
+  "version-name": "1.1.0",
   "url": "https://github.com/tecix/fingerprint-animation"
 }
