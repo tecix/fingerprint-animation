@@ -4,9 +4,20 @@
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
   padding: 22px 18px 18px;
-  margin-bottom: 72px;
   width: 196px;
   spacing: 12px;
+}
+
+.fp-hud-frame {
+  margin-bottom: 72px;
+}
+
+/* Over a blurred backdrop the HUD only tints it. (No shadow: it would show
+   through the tint as a dark rim.) */
+.fp-hud.fp-hud-blurred {
+  background-color: rgba(30, 30, 32, 0.38);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: none;
 }
 
 .fp-hud-glyph {

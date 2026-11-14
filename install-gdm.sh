@@ -16,6 +16,7 @@ UUID=fingerprint-animation@tecix
 SRC="$(cd "$(dirname "$0")" && pwd)/$UUID"
 DEST=/usr/share/gnome-shell/extensions/$UUID
 FILES="metadata.json extension.js glyph.js stylesheet.css"
+SCHEMA=schemas/org.gnome.shell.extensions.fingerprint-animation.gschema.xml
 
 # Debian/Ubuntu: gdm3 compiles /usr/share/gdm/dconf/* on start.
 DEBIAN_DCONF_DIR=/usr/share/gdm/dconf
@@ -49,7 +50,7 @@ if [ "${1:-}" = "--remove" ]; then
     exit 0
 fi
 
-for f in $FILES; do
+for f in $FILES $SCHEMA; do
     if [ ! -f "$SRC/$f" ]; then
         echo "Missing $SRC/$f" >&2
         exit 1
@@ -69,6 +70,9 @@ install -d -m755 "$DEST"
 for f in $FILES; do
     install -m644 "$SRC/$f" "$DEST/$f"
 done
+install -d -m755 "$DEST/schemas"
+install -m644 "$SRC/$SCHEMA" "$DEST/$SCHEMA"
+glib-compile-schemas "$DEST/schemas"
 # Let this system-wide copy run on the login screen too.
 sed -i 's/"unlock-dialog"/"unlock-dialog", "gdm"/' "$DEST/metadata.json"
 grep -q '"gdm"' "$DEST/metadata.json"

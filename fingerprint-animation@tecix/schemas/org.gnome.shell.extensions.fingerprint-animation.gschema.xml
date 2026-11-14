@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.fingerprint-animation"
+          path="/org/gnome/shell/extensions/fingerprint-animation/">
+    <key name="blur-mode" type="s">
+      <choices>
+        <choice value="auto"/>
+        <choice value="on"/>
+        <choice value="off"/>
+      </choices>
+      <default>'auto'</default>
+      <summary>Blur the background behind the HUD</summary>
+      <description>"auto" blurs it while the Blur my Shell extension is running, "on" always does, "off" never does. Never applies on the lock or login screen.</description>
+    </key>
+    <key name="blur-radius" type="i">
+      <range min="1" max="100"/>
+      <default>30</default>
+      <summary>Blur strength in pixels</summary>
+    </key>
+    <key name="blur-brightness" type="d">
+      <range min="0.0" max="1.0"/>
+      <default>0.6</default>
+      <summary>Brightness of the blurred background</summary>
+    </key>
+  </schema>
+</schemalist>
